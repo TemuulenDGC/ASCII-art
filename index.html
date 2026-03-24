@@ -2,33 +2,31 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASCII.PRO | Live Engine</title>
+    <title>ASCII.PRO | Hardened Engine</title>
     <style>
-        :root { --bg: #000; --ui: #1a1a1a; --accent: #ffffff; }
-        body { background: var(--bg); color: #fff; font-family: 'SF Mono', monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        :root { --bg: #000; --ui: #151515; --accent: #fff; --error: #ff4444; }
+        body { background: var(--bg); color: #fff; font-family: 'Courier New', monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         
-        #toolbar { background: var(--ui); padding: 12px 20px; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid #333; z-index: 10; font-size: 10px; }
+        #toolbar { background: var(--ui); padding: 10px 20px; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid #333; flex-wrap: wrap; }
         .group { display: flex; align-items: center; gap: 8px; border-right: 1px solid #333; padding-right: 15px; }
         
-        .btn { background: #333; border: 1px solid #444; color: #fff; padding: 6px 12px; cursor: pointer; font-size: 9px; text-transform: uppercase; transition: 0.2s; }
-        .btn:hover { background: #555; }
+        .btn { background: #222; border: 1px solid #444; color: #fff; padding: 6px 12px; cursor: pointer; font-size: 10px; text-transform: uppercase; }
+        .btn:hover { background: #444; }
         .btn.active { background: var(--accent); color: #000; border: none; font-weight: bold; }
         
-        select, input[type="range"] { background: #000; color: #fff; border: 1px solid #444; font-size: 9px; padding: 4px; }
-        input[type="range"] { width: 60px; height: 2px; appearance: none; }
-
-        #container { flex: 1; display: flex; justify-content: center; align-items: center; background: #000; }
-        canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+        #canvas-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #000; position: relative; }
+        canvas { max-width: 100%; max-height: 90vh; background: #000; }
         
-        #stats { margin-left: auto; opacity: 0.5; }
-        #file-input { display: none; }
+        #debug-log { position: absolute; bottom: 10px; left: 10px; font-size: 9px; color: #555; pointer-events: none; max-width: 300px; }
+        #stats { margin-left: auto; font-size: 10px; color: #666; }
+        input[type="file"] { display: none; }
+        select { background: #000; color: #fff; border: 1px solid #444; font-size: 10px; }
     </style>
 </head>
 <body>
 
 <div id="toolbar">
-    <button id="webcam-btn" class="btn" onclick="startWebcam()">Live Camera</button>
+    <button id="cam-btn" class="btn" onclick="toggleWebcam()">Camera: OFF</button>
     <label class="btn">Upload File<input type="file" id="file-input" accept="image/*,video/*"></label>
     
     <div class="group">
@@ -36,143 +34,141 @@
         <select id="style-select">
             <option value="Classic">Classic</option>
             <option value="Blocks">Blocks</option>
-            <option value="Binary">Binary</option>
             <option value="Cyber">Cyber</option>
         </select>
     </div>
 
     <div class="group">
         <span>Res</span>
-        <input type="range" id="res" min="5" max="25" value="12">
+        <input type="range" id="res" min="6" max="24" value="12">
     </div>
 
-    <div class="group">
-        <span>Gamma</span>
-        <input type="range" id="gamma" min="0.5" max="3.0" step="0.1" value="1.0">
-    </div>
+    <button class="btn" onclick="autoFix()" style="border-color: #666;">AI Auto-Fix</button>
+    <button class="btn" onclick="downloadImg()">Export</button>
 
-    <button class="btn active" onclick="autoOptimize()">AI AUTO-FIX</button>
-    <button class="btn" onclick="takeSnapshot()">Export</button>
-
-    <div id="stats">00 FPS</div>
+    <div id="stats">Ready</div>
 </div>
 
-<div id="container">
+<div id="canvas-container">
     <canvas id="out"></canvas>
+    <div id="debug-log">Engine initialized...</div>
 </div>
 
 <script>
-/**
- * LIVE ASCII MULTI-ENGINE
+/** * HARDENED CORE LOGIC
  */
+const log = (msg) => { document.getElementById('debug-log').innerText = `LOG: ${msg}`; console.log(msg); };
 const outCanvas = document.getElementById('out');
-const ctx = outCanvas.getContext('2d', { alpha: false });
+const ctx = outCanvas.getContext('2d', { alpha: false, desynchronized: true });
 const resSlider = document.getElementById('res');
-const gammaSlider = document.getElementById('gamma');
 const styleSelect = document.getElementById('style-select');
-const fileInput = document.getElementById('file-input');
 const stats = document.getElementById('stats');
-const webcamBtn = document.getElementById('webcam-btn');
 
-let currentSource = document.createElement('video');
-currentSource.loop = true; currentSource.muted = true; currentSource.crossOrigin = "anonymous";
-currentSource.playsInline = true;
+let source = document.createElement('video');
+source.muted = true; source.loop = true; source.crossOrigin = "anonymous"; source.setAttribute('playsinline', '');
 
 let pCanvas = new OffscreenCanvas(1, 1);
 let pCtx = pCanvas.getContext('2d', { willReadFrequently: true });
 
-const STYLES = {
+const CHARS = {
     Classic: " .:-=+*#%@".split(""),
     Blocks: " ░▒▓█".split(""),
-    Binary: "01".split(""),
     Cyber: "日ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾ".split("")
 };
 
-let lastTime = 0;
-let useWebcam = false;
+let isCam = false;
+let lastUpdate = 0;
 
-// INITIAL LOAD (Sample Video)
+// 1. HARDENED STARTUP
 window.onload = () => {
-    currentSource.src = "https://www.w3schools.com/html/mov_bbb.mp4"; 
-    currentSource.play();
-    requestAnimationFrame(loop);
+    log("Loading demo video...");
+    // Using a reliable sample URL
+    source.src = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+    source.oncanplay = () => { source.play(); log("Demo playing."); requestAnimationFrame(loop); };
+    source.onerror = () => log("Source Error: Check CORS or File Type.");
 };
 
-// WEBCAM LOGIC
-async function startWebcam() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        currentSource.srcObject = stream;
-        currentSource.play();
-        useWebcam = true;
-        webcamBtn.classList.add('active');
-    } catch (err) {
-        alert("Camera access denied.");
+// 2. WEBCAM TOGGLE (with Permission Handling)
+async function toggleWebcam() {
+    if (!isCam) {
+        try {
+            log("Requesting camera...");
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            source.srcObject = stream;
+            source.onloadedmetadata = () => {
+                source.play();
+                isCam = true;
+                document.getElementById('cam-btn').innerText = "Camera: ON";
+                document.getElementById('cam-btn').classList.add('active');
+                log("Camera active.");
+            };
+        } catch (err) {
+            log("Camera Denied: " + err.message);
+        }
+    } else {
+        location.reload(); // Hard reset for clean stream closure
     }
 }
 
-fileInput.onchange = (e) => {
-    useWebcam = false;
-    webcamBtn.classList.remove('active');
-    currentSource.srcObject = null;
-    currentSource.src = URL.createObjectURL(e.target.files[0]);
-    currentSource.play();
+// 3. FILE UPLOAD
+document.getElementById('file-input').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    log("File loaded: " + file.name);
+    source.srcObject = null;
+    source.src = URL.createObjectURL(file);
+    source.play();
 };
 
-function autoOptimize() {
-    pCtx.drawImage(currentSource, 0, 0, 50, 50);
-    const data = pCtx.getImageData(0, 0, 50, 50).data;
-    let brightness = 0;
-    for(let i=0; i<data.length; i+=4) {
-        brightness += (0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2]);
-    }
-    const avg = brightness / (data.length/4);
-    gammaSlider.value = avg < 100 ? 0.7 : 1.5;
-    console.log("AI: Re-calibrated for environment.");
+function autoFix() {
+    resSlider.value = 10;
+    log("AI: Resetting Resolution for clarity.");
 }
 
 function loop(now) {
-    stats.innerText = `${Math.round(1000/(now-lastTime))} FPS`;
-    lastTime = now;
-    render();
+    const dt = now - lastUpdate;
+    lastUpdate = now;
+    stats.innerText = `${Math.round(1000/dt)} FPS`;
+    
+    if (source.readyState >= 2) render(); // Only draw if data is available
     requestAnimationFrame(loop);
 }
 
 function render() {
-    // Get dimensions from source (handles webcam or video)
-    const w = currentSource.videoWidth || currentSource.width || 640;
-    const h = currentSource.videoHeight || currentSource.height || 480;
-    
+    const w = source.videoWidth || 640;
+    const h = source.videoHeight || 480;
     const gap = parseInt(resSlider.value);
-    const gamma = parseFloat(gammaSlider.value);
-    const charSet = STYLES[styleSelect.value];
+    const vGap = gap * 1.8; // Aspect ratio fix
 
-    // Character Aspect Ratio Correction (Standard mono is ~1:1.8)
-    const vGap = gap * 1.8;
-    const sampleW = Math.floor(w / gap);
-    const sampleH = Math.floor(h / vGap);
+    const sw = Math.floor(w / gap);
+    const sh = Math.floor(h / vGap);
 
-    if (outCanvas.width !== w || outCanvas.height !== h) {
+    if (outCanvas.width !== w) {
         outCanvas.width = w; outCanvas.height = h;
-        pCanvas.width = sampleW; pCanvas.height = sampleH;
+        pCanvas.width = sw; pCanvas.height = sh;
+        log(`Buffer Resized: ${sw}x${sh}`);
     }
 
-    pCtx.drawImage(currentSource, 0, 0, sampleW, sampleH);
-    const pixels = pCtx.getImageData(0, 0, sampleW, sampleH).data;
+    // Capture frame to processing canvas
+    pCtx.drawImage(source, 0, 0, sw, sh);
+    const pixels = pCtx.getImageData(0, 0, sw, sh).data;
 
+    // Drawing
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = "#fff";
     ctx.font = `bold ${gap}px monospace`;
     ctx.textBaseline = "top";
 
-    for (let y = 0; y < sampleH; y++) {
-        for (let x = 0; x < sampleW; x++) {
-            const i = (y * sampleW + x) * 4;
-            let l = (0.2126*pixels[i] + 0.7152*pixels[i+1] + 0.0722*pixels[i+2]) / 255;
-            l = Math.pow(l, 1/gamma);
+    const set = CHARS[styleSelect.value];
 
-            const char = charSet[Math.floor(l * (charSet.length - 1))];
+    for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+            const i = (y * sw + x) * 4;
+            // Perceptual brightness
+            const l = (0.2126*pixels[i] + 0.7152*pixels[i+1] + 0.0722*pixels[i+2]) / 255;
+            const char = set[Math.floor(l * (set.length - 1))];
+            
             if (char && char !== " ") {
                 ctx.fillText(char, x * gap, y * vGap);
             }
@@ -180,10 +176,10 @@ function render() {
     }
 }
 
-function takeSnapshot() {
+function downloadImg() {
     const link = document.createElement('a');
-    link.download = `ascii-pro-capture.png`;
-    link.href = outCanvas.toDataURL('image/png');
+    link.download = 'ascii-art.png';
+    link.href = outCanvas.toDataURL();
     link.click();
 }
 </script>
