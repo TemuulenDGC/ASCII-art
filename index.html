@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>High-Fidelity ASCII Processor</title>
+    <style>
+        :root { --ui-bg: #111; --text: #eee; --accent: #fff; }
+        body { background: #000; color: var(--text); font-family: 'Inter', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        #toolbar { background: var(--ui-bg); padding: 12px 24px; display: flex; gap: 30px; align-items: center; border-bottom: 1px solid #222; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+        .control-group { display: flex; align-items: center; gap: 10px; }
+        
+        input[type="range"] { appearance: none; background: #333; height: 2px; width: 80px; }
+        input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; background: var(--accent); cursor: pointer; }
+
+        #canvas-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; background: #000; }
+        canvas { max-width: 95%; max-height: 95%; box-shadow: 0 0 50px rgba(0,0,0,0.5); image-rendering: sharp-inherit; }
+        
+        .file-label { border: 1px solid #444; padding: 6px 12px; cursor: pointer; transition: 0.2s; }
+        .file-label:hover { border-color: var(--accent); color: var(--accent); }
+        #file-input { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="toolbar">
+    <label class="file-label">OPEN MEDIA<input type="file" id="file-input" accept="image/*,video/*"></label>
+    
+    <div class="control-group">
+        <span>Scale</span>
+        <input type="range" id="res" min="3" max="15" value="6">
+    </div>
+
+    <div class="control-group">
+        <span>Gamma</span>
+        <input type="range" id="gamma" min="0.5" max="3" step="0.1" value="1.0">
+    </div>
+
+    <div id="stats" style="margin-left: auto; opacity: 0.5;">00 FPS</div>
+</div>
+
+<div id="canvas-container">
+    <canvas id="out"></canvas>
+</div>
+
+<script>
+const fileInput = document.getElementById('file-input');
+const resSlider = document.getElementById('res');
+const gammaSlider = document.getElementById('gamma');
+const outCanvas = document.getElementById('out');
+const ctx = outCanvas.getContext('2d', { alpha: false });
+const stats = document.getElementById('stats');
+
+const video = document.createElement('video');
+video.loop = true; video.muted = true;
+
+// Pro-level Density String (Normalized for white text on black)
+const ramp = " .:-=+*#%@".split(""); 
+
+let lastFrameTime = 0;
+
+fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    const url = URL.createObjectURL(file);
+    if (file.type.startsWith('video')) {
+        video.src = url;
+        video.play();
+        video.requestVideoFrameCallback(processFrame);
+    } else {
+        const img = new Image();
+        img.src = url;
+        img.onload = () => draw(img);
+    }
+};
+
+function processFrame(now) {
+    stats.innerText = `${Math.round(1000 / (now - lastFrameTime))} FPS`;
+    lastFrameTime = now;
+    draw(video);
+    video.requestVideoFrameCallback(processFrame);
+}
+
+function draw(source) {
+    const w = source.videoWidth || source.width;
+    const h = source.videoHeight || source.height;
+    const gap = parseInt(resSlider.value);
+    const gamma = parseFloat(gammaSlider.value);
+
+    // Dynamic sizing
+    if (outCanvas.width !== w) {
+        outCanvas.width = w;
+        outCanvas.height = h;
+    }
+
+    // Secondary processing canvas (offscreen)
+    const proc = new OffscreenCanvas(w / gap, h / gap);
+    const pCtx = proc.getContext('2d');
+    pCtx.drawImage(source, 0, 0, proc.width, proc.height);
+    const pixels = pCtx.getImageData(0, 0, proc.width, proc.height).data;
+
+    // Background
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, w, h);
+    
+    // Text Style
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${gap}px monospace`;
+    ctx.textAlign = "left";
+
+    for (let y = 0; y < proc.height; y++) {
+        for (let x = 0; x < proc.width; x++) {
+            const i = (y * proc.width + x) * 4;
+            
+            // Perceptual Luminance
+            let l = (0.2126 * pixels[i] + 0.7152 * pixels[i+1] + 0.0722 * pixels[i+2]) / 255;
+            
+            // Apply Gamma Correction: pow(value, 1/gamma)
+            l = Math.pow(l, 1/gamma);
+
+            const char = ramp[Math.floor(l * (ramp.length - 1))];
+            
+            // Offset y by gap to account for text baseline
+            if (char !== " ") {
+                ctx.fillText(char, x * gap, y * gap);
+            }
+        }
+    }
+}
+</script>
+</body>
+</html>
