@@ -2,129 +2,189 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>High-Fidelity ASCII Processor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASCII.PRO | Live Engine</title>
     <style>
-        :root { --ui-bg: #111; --text: #eee; --accent: #fff; }
-        body { background: #000; color: var(--text); font-family: 'Inter', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        :root { --bg: #000; --ui: #1a1a1a; --accent: #ffffff; }
+        body { background: var(--bg); color: #fff; font-family: 'SF Mono', monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         
-        #toolbar { background: var(--ui-bg); padding: 12px 24px; display: flex; gap: 30px; align-items: center; border-bottom: 1px solid #222; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
-        .control-group { display: flex; align-items: center; gap: 10px; }
+        #toolbar { background: var(--ui); padding: 12px 20px; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid #333; z-index: 10; font-size: 10px; }
+        .group { display: flex; align-items: center; gap: 8px; border-right: 1px solid #333; padding-right: 15px; }
         
-        input[type="range"] { appearance: none; background: #333; height: 2px; width: 80px; }
-        input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; background: var(--accent); cursor: pointer; }
+        .btn { background: #333; border: 1px solid #444; color: #fff; padding: 6px 12px; cursor: pointer; font-size: 9px; text-transform: uppercase; transition: 0.2s; }
+        .btn:hover { background: #555; }
+        .btn.active { background: var(--accent); color: #000; border: none; font-weight: bold; }
+        
+        select, input[type="range"] { background: #000; color: #fff; border: 1px solid #444; font-size: 9px; padding: 4px; }
+        input[type="range"] { width: 60px; height: 2px; appearance: none; }
 
-        #canvas-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; background: #000; }
-        canvas { max-width: 95%; max-height: 95%; box-shadow: 0 0 50px rgba(0,0,0,0.5); image-rendering: sharp-inherit; }
+        #container { flex: 1; display: flex; justify-content: center; align-items: center; background: #000; }
+        canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
         
-        .file-label { border: 1px solid #444; padding: 6px 12px; cursor: pointer; transition: 0.2s; }
-        .file-label:hover { border-color: var(--accent); color: var(--accent); }
+        #stats { margin-left: auto; opacity: 0.5; }
         #file-input { display: none; }
     </style>
 </head>
 <body>
 
 <div id="toolbar">
-    <label class="file-label">OPEN MEDIA<input type="file" id="file-input" accept="image/*,video/*"></label>
+    <button id="webcam-btn" class="btn" onclick="startWebcam()">Live Camera</button>
+    <label class="btn">Upload File<input type="file" id="file-input" accept="image/*,video/*"></label>
     
-    <div class="control-group">
-        <span>Scale</span>
-        <input type="range" id="res" min="3" max="15" value="6">
+    <div class="group">
+        <span>Style</span>
+        <select id="style-select">
+            <option value="Classic">Classic</option>
+            <option value="Blocks">Blocks</option>
+            <option value="Binary">Binary</option>
+            <option value="Cyber">Cyber</option>
+        </select>
     </div>
 
-    <div class="control-group">
+    <div class="group">
+        <span>Res</span>
+        <input type="range" id="res" min="5" max="25" value="12">
+    </div>
+
+    <div class="group">
         <span>Gamma</span>
-        <input type="range" id="gamma" min="0.5" max="3" step="0.1" value="1.0">
+        <input type="range" id="gamma" min="0.5" max="3.0" step="0.1" value="1.0">
     </div>
 
-    <div id="stats" style="margin-left: auto; opacity: 0.5;">00 FPS</div>
+    <button class="btn active" onclick="autoOptimize()">AI AUTO-FIX</button>
+    <button class="btn" onclick="takeSnapshot()">Export</button>
+
+    <div id="stats">00 FPS</div>
 </div>
 
-<div id="canvas-container">
+<div id="container">
     <canvas id="out"></canvas>
 </div>
 
 <script>
-const fileInput = document.getElementById('file-input');
-const resSlider = document.getElementById('res');
-const gammaSlider = document.getElementById('gamma');
+/**
+ * LIVE ASCII MULTI-ENGINE
+ */
 const outCanvas = document.getElementById('out');
 const ctx = outCanvas.getContext('2d', { alpha: false });
+const resSlider = document.getElementById('res');
+const gammaSlider = document.getElementById('gamma');
+const styleSelect = document.getElementById('style-select');
+const fileInput = document.getElementById('file-input');
 const stats = document.getElementById('stats');
+const webcamBtn = document.getElementById('webcam-btn');
 
-const video = document.createElement('video');
-video.loop = true; video.muted = true;
+let currentSource = document.createElement('video');
+currentSource.loop = true; currentSource.muted = true; currentSource.crossOrigin = "anonymous";
+currentSource.playsInline = true;
 
-// Pro-level Density String (Normalized for white text on black)
-const ramp = " .:-=+*#%@".split(""); 
+let pCanvas = new OffscreenCanvas(1, 1);
+let pCtx = pCanvas.getContext('2d', { willReadFrequently: true });
 
-let lastFrameTime = 0;
-
-fileInput.onchange = (e) => {
-    const file = e.target.files[0];
-    const url = URL.createObjectURL(file);
-    if (file.type.startsWith('video')) {
-        video.src = url;
-        video.play();
-        video.requestVideoFrameCallback(processFrame);
-    } else {
-        const img = new Image();
-        img.src = url;
-        img.onload = () => draw(img);
-    }
+const STYLES = {
+    Classic: " .:-=+*#%@".split(""),
+    Blocks: " ░▒▓█".split(""),
+    Binary: "01".split(""),
+    Cyber: "日ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾ".split("")
 };
 
-function processFrame(now) {
-    stats.innerText = `${Math.round(1000 / (now - lastFrameTime))} FPS`;
-    lastFrameTime = now;
-    draw(video);
-    video.requestVideoFrameCallback(processFrame);
+let lastTime = 0;
+let useWebcam = false;
+
+// INITIAL LOAD (Sample Video)
+window.onload = () => {
+    currentSource.src = "https://www.w3schools.com/html/mov_bbb.mp4"; 
+    currentSource.play();
+    requestAnimationFrame(loop);
+};
+
+// WEBCAM LOGIC
+async function startWebcam() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        currentSource.srcObject = stream;
+        currentSource.play();
+        useWebcam = true;
+        webcamBtn.classList.add('active');
+    } catch (err) {
+        alert("Camera access denied.");
+    }
 }
 
-function draw(source) {
-    const w = source.videoWidth || source.width;
-    const h = source.videoHeight || source.height;
+fileInput.onchange = (e) => {
+    useWebcam = false;
+    webcamBtn.classList.remove('active');
+    currentSource.srcObject = null;
+    currentSource.src = URL.createObjectURL(e.target.files[0]);
+    currentSource.play();
+};
+
+function autoOptimize() {
+    pCtx.drawImage(currentSource, 0, 0, 50, 50);
+    const data = pCtx.getImageData(0, 0, 50, 50).data;
+    let brightness = 0;
+    for(let i=0; i<data.length; i+=4) {
+        brightness += (0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2]);
+    }
+    const avg = brightness / (data.length/4);
+    gammaSlider.value = avg < 100 ? 0.7 : 1.5;
+    console.log("AI: Re-calibrated for environment.");
+}
+
+function loop(now) {
+    stats.innerText = `${Math.round(1000/(now-lastTime))} FPS`;
+    lastTime = now;
+    render();
+    requestAnimationFrame(loop);
+}
+
+function render() {
+    // Get dimensions from source (handles webcam or video)
+    const w = currentSource.videoWidth || currentSource.width || 640;
+    const h = currentSource.videoHeight || currentSource.height || 480;
+    
     const gap = parseInt(resSlider.value);
     const gamma = parseFloat(gammaSlider.value);
+    const charSet = STYLES[styleSelect.value];
 
-    // Dynamic sizing
-    if (outCanvas.width !== w) {
-        outCanvas.width = w;
-        outCanvas.height = h;
+    // Character Aspect Ratio Correction (Standard mono is ~1:1.8)
+    const vGap = gap * 1.8;
+    const sampleW = Math.floor(w / gap);
+    const sampleH = Math.floor(h / vGap);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+        outCanvas.width = w; outCanvas.height = h;
+        pCanvas.width = sampleW; pCanvas.height = sampleH;
     }
 
-    // Secondary processing canvas (offscreen)
-    const proc = new OffscreenCanvas(w / gap, h / gap);
-    const pCtx = proc.getContext('2d');
-    pCtx.drawImage(source, 0, 0, proc.width, proc.height);
-    const pixels = pCtx.getImageData(0, 0, proc.width, proc.height).data;
+    pCtx.drawImage(currentSource, 0, 0, sampleW, sampleH);
+    const pixels = pCtx.getImageData(0, 0, sampleW, sampleH).data;
 
-    // Background
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
-    
-    // Text Style
     ctx.fillStyle = "#fff";
     ctx.font = `bold ${gap}px monospace`;
-    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
 
-    for (let y = 0; y < proc.height; y++) {
-        for (let x = 0; x < proc.width; x++) {
-            const i = (y * proc.width + x) * 4;
-            
-            // Perceptual Luminance
-            let l = (0.2126 * pixels[i] + 0.7152 * pixels[i+1] + 0.0722 * pixels[i+2]) / 255;
-            
-            // Apply Gamma Correction: pow(value, 1/gamma)
+    for (let y = 0; y < sampleH; y++) {
+        for (let x = 0; x < sampleW; x++) {
+            const i = (y * sampleW + x) * 4;
+            let l = (0.2126*pixels[i] + 0.7152*pixels[i+1] + 0.0722*pixels[i+2]) / 255;
             l = Math.pow(l, 1/gamma);
 
-            const char = ramp[Math.floor(l * (ramp.length - 1))];
-            
-            // Offset y by gap to account for text baseline
-            if (char !== " ") {
-                ctx.fillText(char, x * gap, y * gap);
+            const char = charSet[Math.floor(l * (charSet.length - 1))];
+            if (char && char !== " ") {
+                ctx.fillText(char, x * gap, y * vGap);
             }
         }
     }
+}
+
+function takeSnapshot() {
+    const link = document.createElement('a');
+    link.download = `ascii-pro-capture.png`;
+    link.href = outCanvas.toDataURL('image/png');
+    link.click();
 }
 </script>
 </body>
